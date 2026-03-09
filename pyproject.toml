@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "display-grabber"
+version = "0.1.0"
+description = "Detect the live Mac  display and set it as main, mirroring the rest"
+requires-python = ">=3.11"
+dependencies = ["pyobjc-framework-Quartz"]
+
+[project.scripts]
+display-grabber = "display_grabber.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/display_grabber"]
+
+# ── Ruff ───────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.lint]
+preview = true
+select = ["A", "E3", "E4", "E5", "E7", "E9", "F", "UP", "B", "S", "I", "N", "C90", "C4", "BLE"]
+ignore = [
+    "CPY001",
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "D202", "D203", "D210", "D211", "D212", "D400", "D401", "D407", "D413", "D415",
+    "ERA001",
+    "G004",
+    "PGH003",
+    "RUF012",
+    "T201", "T203",
+    "TRY301", "TRY400",
+    "UP007",
+    "S404",   # subprocess import — macOS-only tool, hardcoded paths only
+    "S603",   # subprocess.run — called with fixed trusted args, no user input
+]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# ── Pyright ────────────────────────────────────────────────────────────────────
+[tool.pyright]
+pythonVersion = "3.11"
+pythonPlatform = "Darwin"
+include = ["src"]
+stubPath = "typings"
+typeCheckingMode = "standard"
+reportMissingModuleSource = false   # pyobjc ships compiled extensions, no source

@@ -1,0 +1,43 @@
+# Minimal stubs for pyobjc Quartz.CoreGraphics functions used by display-grabber.
+# pyobjc ships no type information; these stubs give pyright enough to check our code.
+
+from typing import Any, Final
+
+# ── Types ──────────────────────────────────────────────────────────────────────
+
+CGDirectDisplayID = int
+
+class _CGPoint:
+    x: float
+    y: float
+
+class _CGRect:
+    origin: _CGPoint
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+kCGNullDirectDisplay: Final[int]
+kCGConfigureForSession: Final[int]
+
+# ── Display enumeration ───────────────────────────────────────────────────────
+
+def CGGetOnlineDisplayList(
+    maxDisplays: int,
+    activeArray: None,
+    displayCount: None,
+) -> tuple[int, tuple[int, ...], int]: ...
+def CGDisplayBounds(display: int) -> _CGRect: ...
+def CGDisplayPixelsWide(display: int) -> int: ...
+def CGDisplayPixelsHigh(display: int) -> int: ...
+def CGDisplayIsMain(display: int) -> int: ...
+def CGDisplayIsActive(display: int) -> int: ...
+def CGDisplayIsAsleep(display: int) -> int: ...
+def CGDisplayIsInMirrorSet(display: int) -> int: ...
+
+# ── Display configuration ─────────────────────────────────────────────────────
+
+def CGBeginDisplayConfiguration(configRef: None) -> tuple[int, Any]: ...
+def CGConfigureDisplayMirrorOfDisplay(config: Any, display: int, master: int) -> int: ...
+def CGConfigureDisplayOrigin(config: Any, display: int, x: int, y: int) -> int: ...
+def CGCompleteDisplayConfiguration(config: Any, option: int) -> int: ...
+def CGCancelDisplayConfiguration(config: Any) -> int: ...
