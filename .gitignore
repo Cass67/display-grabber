@@ -83,6 +83,9 @@ history.jsonl
 sessions/
 log/
 
+# Superpowers brainstorm sessions
+.superpowers/
+
 # OS and editor workspace noise.
 .AppleDouble
 .LSOverride

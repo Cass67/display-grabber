@@ -263,9 +263,9 @@
     if ([[NSFileManager defaultManager] fileExistsAtPath:agentPlist]) {
         NSString *uid = [NSString stringWithFormat:@"%d", getuid()];
         NSTask *task = [[NSTask alloc] init];
-        task.launchPath = @"/bin/launchctl";
+        task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
         task.arguments = @[@"bootout", [NSString stringWithFormat:@"gui/%@", uid], agentPlist];
-        [task launch];
+        [task launchAndReturnError:nil];
         [task waitUntilExit];
     }
     [NSApp terminate:nil];
