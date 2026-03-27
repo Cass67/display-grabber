@@ -37,14 +37,9 @@
 }
 
 - (CGDirectDisplayID)detectActive {
-    // Per spec: use CGMainDisplayID(). Only fall back if there is exactly one display.
-    CGDirectDisplayID main = CGMainDisplayID();
-    if (main != 0) return main;
-
-    CGDirectDisplayID ids[32];
-    uint32_t count = 0;
-    CGGetOnlineDisplayList(32, ids, &count);
-    return count == 1 ? ids[0] : 0; // 0 = "could not determine"
+    // CGMainDisplayID() returns the display with the menu bar.
+    // Returns 0 if no displays are online.
+    return CGMainDisplayID();
 }
 
 - (BOOL)setMain:(CGDirectDisplayID)targetID error:(NSString **)errorOut {
@@ -55,6 +50,7 @@
     CGDisplayConfigRef cfg = NULL;
     CGError err = CGBeginDisplayConfiguration(&cfg);
     if (err != kCGErrorSuccess || cfg == NULL) {
+        if (cfg != NULL) CGCancelDisplayConfiguration(cfg);
         if (errorOut) *errorOut = [NSString stringWithFormat:@"CGBeginDisplayConfiguration failed (%d)", err];
         return NO;
     }
