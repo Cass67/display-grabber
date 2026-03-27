@@ -15,6 +15,8 @@ remaining live display, promotes it to main (menu bar), and mirrors the inactive
 
 ## Installation
 
+### Python CLI
+
 ```bash
 pip install .
 ```
@@ -23,6 +25,16 @@ Or editable (for development):
 
 ```bash
 pip install -e .
+```
+
+### macOS Tray App
+
+The tray app (`DisplayGrabber.app`) provides a menu bar interface for managing displays without using the terminal.
+
+```bash
+make tray           # Build the tray app
+make install-tray   # Install to ~/Applications and register for auto-start
+make uninstall-tray # Remove app and LaunchAgent
 ```
 
 ## Usage
@@ -55,6 +67,17 @@ display-grabber
 display-grabber --main 2
 ```
 
+### Tray App
+
+The tray app provides quick access to display management from the macOS menu bar:
+
+- **Auto-detect & set main** — Automatically detects and sets the main display
+- **Set Main Display** — Manually choose which display to set as main
+- **Dry Run** — Preview what would happen without making changes
+- **Quit** — Exits the app (auto-start will be disabled)
+
+The app automatically starts at login and runs in the background.
+
 ### How detection works
 
 A display is considered **live** when `CGDisplayIsActive` returns true and it isn't
@@ -67,10 +90,13 @@ yet), auto-detect will report multiple live displays and prompt you to use `--ma
 ## Development
 
 ```bash
-make dev-install   # editable install
+make dev-install   # editable install (Python CLI)
 make lint          # ruff format + check
 make typecheck     # pyright
 make check         # lint + typecheck
+make tray          # build tray app
+make install-tray  # install tray app
+make uninstall-tray # uninstall tray app
 ```
 
 ## Project layout
@@ -80,6 +106,10 @@ src/display_grabber/
   __init__.py      version
   displays.py      CoreGraphics display logic
   cli.py           argparse entry point
+tray/
+  main.m           Tray app source (Objective-C)
+  Info.plist       App bundle metadata
+  launchagent.plist.template  LaunchAgent template
 typings/Quartz/
   __init__.pyi     hand-written stubs for pyobjc Quartz
 pyproject.toml
