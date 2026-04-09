@@ -9,10 +9,40 @@
 - (NSArray<NSDictionary *> *)listDisplays;
 - (CGDirectDisplayID)detectActive;
 - (BOOL)setMain:(CGDirectDisplayID)targetID error:(NSString **)errorOut;
+- (BOOL)unmirrorOrdered:(NSArray<NSNumber *> *)orderedIDs mainID:(CGDirectDisplayID)mainID error:(NSString **)errorOut;
 - (NSString *)dryRunForDisplay:(CGDirectDisplayID)targetID;
 @end
 
 @implementation DisplayManager
+
+- (NSDictionary<NSNumber *, NSString *> *)_fetchDisplayNames {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/sbin/system_profiler"];
+    task.arguments = @[@"SPDisplaysDataType", @"-json"];
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSPipe pipe];
+    NSError *launchErr = nil;
+    if (![task launchAndReturnError:&launchErr]) return @{};
+    [task waitUntilExit];
+
+    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (!json) return @{};
+
+    NSMutableDictionary *names = [NSMutableDictionary dictionary];
+    for (NSDictionary *gpu in json[@"SPDisplaysDataType"] ?: @[]) {
+        for (NSDictionary *monitor in gpu[@"spdisplays_ndrvs"] ?: @[]) {
+            id rawID = monitor[@"_spdisplays_displayID"];
+            NSString *name = monitor[@"_name"];
+            if (rawID && name) {
+                NSNumber *key = @([rawID unsignedIntValue]);
+                names[key] = name;
+            }
+        }
+    }
+    return names;
+}
 
 - (NSArray<NSDictionary *> *)listDisplays {
     CGDirectDisplayID ids[32];
@@ -20,17 +50,21 @@
     CGError err = CGGetOnlineDisplayList(32, ids, &count);
     if (err != kCGErrorSuccess) return @[];
 
+    NSDictionary<NSNumber *, NSString *> *names = [self _fetchDisplayNames];
+
     NSMutableArray *result = [NSMutableArray array];
     for (uint32_t i = 0; i < count; i++) {
         CGDirectDisplayID did = ids[i];
         size_t w = CGDisplayPixelsWide(did);
         size_t h = CGDisplayPixelsHigh(did);
         BOOL isMain = CGDisplayIsMain(did);
+        NSString *name = names[@(did)] ?: @"";
         [result addObject:@{
             @"id":     @(did),
             @"width":  @(w),
             @"height": @(h),
             @"isMain": @(isMain),
+            @"name":   name,
         }];
     }
     return result;
@@ -78,6 +112,73 @@
     if (err != kCGErrorSuccess) {
         CGCancelDisplayConfiguration(cfg);
         if (errorOut) *errorOut = [NSString stringWithFormat:@"CGCompleteDisplayConfiguration failed (%d)", err];
+        return NO;
+    }
+    return YES;
+}
+
+// orderedIDs: physical left-to-right order. mainID: which display gets the menu bar (can be anywhere in the row).
+- (BOOL)unmirrorOrdered:(NSArray<NSNumber *> *)orderedIDs mainID:(CGDirectDisplayID)mainID error:(NSString **)errorOut {
+    // Step 1: firmly claim the menu bar on mainID using setMain.
+    if (![self setMain:mainID error:errorOut]) return NO;
+
+    // Step 2: remove all mirroring.
+    CGDirectDisplayID ids[32];
+    uint32_t count = 0;
+    CGGetOnlineDisplayList(32, ids, &count);
+
+    CGDisplayConfigRef cfg = NULL;
+    CGError err = CGBeginDisplayConfiguration(&cfg);
+    if (err != kCGErrorSuccess || cfg == NULL) {
+        if (cfg != NULL) CGCancelDisplayConfiguration(cfg);
+        if (errorOut) *errorOut = [NSString stringWithFormat:@"CGBeginDisplayConfiguration (unmirror) failed (%d)", err];
+        return NO;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        CGConfigureDisplayMirrorOfDisplay(cfg, ids[i], kCGNullDirectDisplay);
+    }
+    err = CGCompleteDisplayConfiguration(cfg, kCGConfigureForSession);
+    if (err != kCGErrorSuccess) {
+        CGCancelDisplayConfiguration(cfg);
+        if (errorOut) *errorOut = [NSString stringWithFormat:@"CGCompleteDisplayConfiguration (unmirror) failed (%d)", err];
+        return NO;
+    }
+
+    // Step 3: lay out displays in the requested physical order.
+    // mainID sits at (0,0); displays to its left get negative x coords,
+    // displays to its right get positive x coords.
+    NSUInteger mainIdx = [orderedIDs indexOfObject:@(mainID)];
+
+    cfg = NULL;
+    err = CGBeginDisplayConfiguration(&cfg);
+    if (err != kCGErrorSuccess || cfg == NULL) {
+        if (cfg != NULL) CGCancelDisplayConfiguration(cfg);
+        if (errorOut) *errorOut = [NSString stringWithFormat:@"CGBeginDisplayConfiguration (layout) failed (%d)", err];
+        return NO;
+    }
+
+    CGConfigureDisplayOrigin(cfg, mainID, 0, 0);
+
+    // Displays to the right of main
+    int32_t xRight = (int32_t)CGDisplayPixelsWide(mainID);
+    for (NSUInteger i = mainIdx + 1; i < orderedIDs.count; i++) {
+        CGDirectDisplayID did = [orderedIDs[i] unsignedIntValue];
+        CGConfigureDisplayOrigin(cfg, did, xRight, 0);
+        xRight += (int32_t)CGDisplayPixelsWide(did);
+    }
+
+    // Displays to the left of main (negative x)
+    int32_t xLeft = 0;
+    for (NSInteger i = (NSInteger)mainIdx - 1; i >= 0; i--) {
+        CGDirectDisplayID did = [orderedIDs[i] unsignedIntValue];
+        xLeft -= (int32_t)CGDisplayPixelsWide(did);
+        CGConfigureDisplayOrigin(cfg, did, xLeft, 0);
+    }
+
+    err = CGCompleteDisplayConfiguration(cfg, kCGConfigureForSession);
+    if (err != kCGErrorSuccess) {
+        CGCancelDisplayConfiguration(cfg);
+        if (errorOut) *errorOut = [NSString stringWithFormat:@"CGCompleteDisplayConfiguration (layout) failed (%d)", err];
         return NO;
     }
     return YES;
@@ -148,6 +249,37 @@
     self.statusItem.menu = menu;
 }
 
+- (NSString *)_labelForDisplay:(NSDictionary *)d {
+    NSString *name = [d[@"name"] length] > 0 ? [NSString stringWithFormat:@" — %@", d[@"name"]] : @"";
+    return [NSString stringWithFormat:@"Display %u (%lu×%lu)%@",
+        [d[@"id"] unsignedIntValue],
+        [d[@"width"] unsignedLongValue],
+        [d[@"height"] unsignedLongValue],
+        name];
+}
+
+// Short name for permutation labels: monitor name if known, else "Display N"
+- (NSString *)_shortNameForDisplay:(NSDictionary *)d {
+    if ([d[@"name"] length] > 0) return d[@"name"];
+    return [NSString stringWithFormat:@"Display %u", [d[@"id"] unsignedIntValue]];
+}
+
+// Generate all permutations of an array (for ≤4 displays this is fine)
+- (NSArray<NSArray *> *)_permutations:(NSArray *)arr {
+    if (arr.count <= 1) return @[arr];
+    NSMutableArray *result = [NSMutableArray array];
+    for (NSUInteger i = 0; i < arr.count; i++) {
+        NSMutableArray *rest = [arr mutableCopy];
+        [rest removeObjectAtIndex:i];
+        for (NSArray *perm in [self _permutations:rest]) {
+            NSMutableArray *full = [NSMutableArray arrayWithObject:arr[i]];
+            [full addObjectsFromArray:perm];
+            [result addObject:full];
+        }
+    }
+    return result;
+}
+
 // Called every time the menu is about to open — rebuild from current display state
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     [menu removeAllItems];
@@ -157,10 +289,8 @@
     // --- Status items (non-clickable, show current display state) ---
     for (NSDictionary *d in displays) {
         BOOL isMain = [d[@"isMain"] boolValue];
-        NSString *label = [NSString stringWithFormat:@"Display %u — %lu×%lu%@",
-            [d[@"id"] unsignedIntValue],
-            [d[@"width"] unsignedLongValue],
-            [d[@"height"] unsignedLongValue],
+        NSString *label = [NSString stringWithFormat:@"%@%@",
+            [self _labelForDisplay:d],
             isMain ? @" (main)" : @""];
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:label action:nil keyEquivalent:@""];
         item.state = isMain ? NSControlStateValueOn : NSControlStateValueOff;
@@ -183,12 +313,7 @@
                                                   keyEquivalent:@""];
     NSMenu *setMainMenu = [[NSMenu alloc] init];
     for (NSDictionary *d in displays) {
-        CGDirectDisplayID did = [d[@"id"] unsignedIntValue];
-        NSString *label = [NSString stringWithFormat:@"Display %u — %lu×%lu",
-            did,
-            [d[@"width"] unsignedLongValue],
-            [d[@"height"] unsignedLongValue]];
-        NSMenuItem *sub = [[NSMenuItem alloc] initWithTitle:label
+        NSMenuItem *sub = [[NSMenuItem alloc] initWithTitle:[self _labelForDisplay:d]
                                                      action:@selector(setMainDisplay:)
                                               keyEquivalent:@""];
         sub.target = self;
@@ -198,18 +323,47 @@
     setMainItem.submenu = setMainMenu;
     [menu addItem:setMainItem];
 
+    // --- Unmirror / Extend ---
+    // Top level: pick which display gets the menu bar.
+    // Sub-submenu: all 6 physical orderings, with the chosen display marked (★).
+    NSMenuItem *unmirrorItem = [[NSMenuItem alloc] initWithTitle:@"Unmirror (Extended Desktop)"
+                                                          action:nil
+                                                   keyEquivalent:@""];
+    NSMenu *unmirrorMenu = [[NSMenu alloc] init];
+    for (NSDictionary *mainDisplay in displays) {
+        NSMenuItem *mainItem = [[NSMenuItem alloc] initWithTitle:[self _shortNameForDisplay:mainDisplay]
+                                                          action:nil
+                                                   keyEquivalent:@""];
+        NSMenu *orderMenu = [[NSMenu alloc] init];
+        for (NSArray<NSDictionary *> *perm in [self _permutations:displays]) {
+            NSMutableArray *names = [NSMutableArray array];
+            NSMutableArray *ids   = [NSMutableArray array];
+            for (NSDictionary *d in perm) {
+                NSString *name = [self _shortNameForDisplay:d];
+                if ([d[@"id"] isEqual:mainDisplay[@"id"]]) name = [name stringByAppendingString:@"★"];
+                [names addObject:name];
+                [ids addObject:d[@"id"]];
+            }
+            NSMenuItem *orderItem = [[NSMenuItem alloc] initWithTitle:[names componentsJoinedByString:@" → "]
+                                                               action:@selector(unmirrorOrdered:)
+                                                        keyEquivalent:@""];
+            orderItem.target = self;
+            orderItem.representedObject = @{@"main": mainDisplay[@"id"], @"order": ids};
+            [orderMenu addItem:orderItem];
+        }
+        mainItem.submenu = orderMenu;
+        [unmirrorMenu addItem:mainItem];
+    }
+    unmirrorItem.submenu = unmirrorMenu;
+    [menu addItem:unmirrorItem];
+
     // --- Dry Run submenu ---
     NSMenuItem *dryRunItem = [[NSMenuItem alloc] initWithTitle:@"Dry Run"
                                                         action:nil
                                                  keyEquivalent:@""];
-    NSMenu *dryRunMenu = [[NSMenu alloc] init]; // separate instance from setMainMenu
+    NSMenu *dryRunMenu = [[NSMenu alloc] init];
     for (NSDictionary *d in displays) {
-        CGDirectDisplayID did = [d[@"id"] unsignedIntValue];
-        NSString *label = [NSString stringWithFormat:@"Display %u — %lu×%lu",
-            did,
-            [d[@"width"] unsignedLongValue],
-            [d[@"height"] unsignedLongValue]];
-        NSMenuItem *sub = [[NSMenuItem alloc] initWithTitle:label
+        NSMenuItem *sub = [[NSMenuItem alloc] initWithTitle:[self _labelForDisplay:d]
                                                      action:@selector(dryRunDisplay:)
                                               keyEquivalent:@""];
         sub.target = self;
@@ -247,6 +401,15 @@
     NSString *err = nil;
     BOOL ok = [self.displayManager setMain:did error:&err];
     if (!ok) [self showAlert:@"Failed to set display." informative:err ?: @""];
+}
+
+- (void)unmirrorOrdered:(NSMenuItem *)sender {
+    NSDictionary *config = sender.representedObject;
+    NSArray<NSNumber *> *orderedIDs = config[@"order"];
+    CGDirectDisplayID mainID = [config[@"main"] unsignedIntValue];
+    NSString *err = nil;
+    BOOL ok = [self.displayManager unmirrorOrdered:orderedIDs mainID:mainID error:&err];
+    if (!ok) [self showAlert:@"Failed to unmirror displays." informative:err ?: @""];
 }
 
 - (void)dryRunDisplay:(NSMenuItem *)sender {

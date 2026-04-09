@@ -1,19 +1,3 @@
-.PHONY: lint typecheck check install dev-install
-
-lint:
-	ruff format src/ && ruff check --fix src/
-
-typecheck:
-	pyright src/
-
-check: lint typecheck
-
-install:
-	pip install .
-
-dev-install:
-	pip install -e .
-
 # --- Tray app ---
 TRAY_SRC     = tray/main.m
 TRAY_APP     = dist/DisplayGrabber.app
@@ -21,7 +5,9 @@ TRAY_BIN     = $(TRAY_APP)/Contents/MacOS/DisplayGrabber
 TRAY_PLIST   = $(TRAY_APP)/Contents/Info.plist
 LAUNCH_AGENTS = $(HOME)/Library/LaunchAgents
 AGENT_PLIST  = $(LAUNCH_AGENTS)/com.display-grabber.tray.plist
-UID          := $(shell id -u)
+# Use SUDO_UID/SUDO_USER when invoked via sudo, otherwise the current user
+REAL_UID     := $(shell echo $${SUDO_UID:-$$(id -u)})
+REAL_USER    := $(shell echo $${SUDO_USER:-$$(id -un)})
 
 .PHONY: tray install-tray uninstall-tray
 
@@ -42,9 +28,11 @@ install-tray: tray
 	mkdir -p $(LAUNCH_AGENTS)
 	sed "s|APP_PATH|$(HOME)/Applications/DisplayGrabber.app/Contents/MacOS/DisplayGrabber|g" \
 	    tray/launchagent.plist.template > $(AGENT_PLIST)
-	launchctl bootstrap gui/$(UID) $(AGENT_PLIST)
+	chown $(REAL_USER) $(AGENT_PLIST)
+	-launchctl bootout gui/$(REAL_UID) $(AGENT_PLIST) 2>/dev/null
+	launchctl bootstrap gui/$(REAL_UID) $(AGENT_PLIST)
 
 uninstall-tray:
-	-launchctl bootout gui/$(UID) $(AGENT_PLIST) 2>/dev/null
+	-launchctl bootout gui/$(REAL_UID) $(AGENT_PLIST) 2>/dev/null
 	rm -f $(AGENT_PLIST)
 	rm -rf ~/Applications/DisplayGrabber.app
