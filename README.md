@@ -13,13 +13,41 @@ to main (menu bar) and mirror or extend the rest.
 
 ## Installation
 
+### 1. Install Command Line Tools (if not already installed)
+
 ```bash
-make tray           # Build the app
-sudo make install-tray   # Install to ~/Applications and register for auto-start
-sudo make uninstall-tray # Remove app and LaunchAgent
+xcode-select --install
 ```
 
-The app starts automatically at login via a LaunchAgent.
+### 2. Build the app (as yourself — no sudo)
+
+```bash
+make tray
+```
+
+This compiles `tray/main.m` and produces `dist/DisplayGrabber.app`.
+
+### 3. Install and register for auto-start
+
+```bash
+sudo make install-tray
+```
+
+This copies the app to `~/Applications/`, writes a LaunchAgent plist to
+`~/Library/LaunchAgents/`, and registers it with `launchctl` so the app
+starts automatically at login.
+
+> **Important:** always run `make tray` (step 2) before `sudo make install-tray`.
+> The build must happen as your own user — building as root causes code-signing
+> issues that prevent the app from launching.
+
+### Uninstall
+
+```bash
+sudo make uninstall-tray
+```
+
+Removes the app and LaunchAgent and stops the running instance.
 
 ## Usage
 
@@ -47,6 +75,12 @@ S34C65xU  →  VX3276-QHD → S34C65xU★ → DELL U3415W
 Detects the single currently-active display and sets it as main, mirroring all others.
 Useful after switching monitors away to another device — only the Mac's own display
 remains active and gets promoted automatically.
+
+### Restore last layout
+
+After using Unmirror, a **Restore** item appears showing the last used layout (e.g.
+`VX3276-QHD → S34C65xU★ → DELL U3415W`). Selecting it reapplies that layout instantly.
+The layout is saved by display name and persists across reboots.
 
 ### Dry Run
 

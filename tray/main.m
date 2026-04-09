@@ -307,6 +307,24 @@
     autoItem.target = self;
     [menu addItem:autoItem];
 
+    // --- Restore last layout (only shown if a layout has been saved) ---
+    NSDictionary *savedLayout = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"lastUnmirrorLayout"];
+    if (savedLayout) {
+        NSArray<NSString *> *orderedNames = savedLayout[@"order"];
+        NSString *mainName = savedLayout[@"main"];
+        NSMutableArray *labelNames = [NSMutableArray array];
+        for (NSString *name in orderedNames) {
+            [labelNames addObject:[name isEqualToString:mainName] ? [name stringByAppendingString:@"★"] : name];
+        }
+        NSString *layoutLabel = [NSString stringWithFormat:@"Restore: %@",
+            [labelNames componentsJoinedByString:@" → "]];
+        NSMenuItem *restoreItem = [[NSMenuItem alloc] initWithTitle:layoutLabel
+                                                             action:@selector(restoreLastLayout:)
+                                                      keyEquivalent:@"r"];
+        restoreItem.target = self;
+        [menu addItem:restoreItem];
+    }
+
     // --- Set Main submenu ---
     NSMenuItem *setMainItem = [[NSMenuItem alloc] initWithTitle:@"Set Main Display"
                                                          action:nil
@@ -409,7 +427,57 @@
     CGDirectDisplayID mainID = [config[@"main"] unsignedIntValue];
     NSString *err = nil;
     BOOL ok = [self.displayManager unmirrorOrdered:orderedIDs mainID:mainID error:&err];
-    if (!ok) [self showAlert:@"Failed to unmirror displays." informative:err ?: @""];
+    if (!ok) { [self showAlert:@"Failed to unmirror displays." informative:err ?: @""]; return; }
+
+    // Persist by display name so the layout survives ID changes across reboots
+    NSArray<NSDictionary *> *displays = [self.displayManager listDisplays];
+    NSDictionary<NSNumber *, NSString *> *idToName = [self _idToNameMap:displays];
+    NSMutableArray<NSString *> *orderedNames = [NSMutableArray array];
+    for (NSNumber *idNum in orderedIDs) {
+        NSString *name = idToName[idNum] ?: [NSString stringWithFormat:@"Display %u", [idNum unsignedIntValue]];
+        [orderedNames addObject:name];
+    }
+    NSString *mainName = idToName[@(mainID)] ?: [NSString stringWithFormat:@"Display %u", mainID];
+    [[NSUserDefaults standardUserDefaults] setObject:@{@"main": mainName, @"order": orderedNames}
+                                              forKey:@"lastUnmirrorLayout"];
+}
+
+- (NSDictionary<NSNumber *, NSString *> *)_idToNameMap:(NSArray<NSDictionary *> *)displays {
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    for (NSDictionary *d in displays) {
+        map[d[@"id"]] = [self _shortNameForDisplay:d];
+    }
+    return map;
+}
+
+- (void)restoreLastLayout:(id)sender {
+    NSDictionary *saved = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"lastUnmirrorLayout"];
+    if (!saved) return;
+
+    NSString *mainName = saved[@"main"];
+    NSArray<NSString *> *orderedNames = saved[@"order"];
+
+    // Map current display names back to IDs
+    NSArray<NSDictionary *> *displays = [self.displayManager listDisplays];
+    NSDictionary<NSNumber *, NSString *> *idToName = [self _idToNameMap:displays];
+    NSMutableDictionary<NSString *, NSNumber *> *nameToID = [NSMutableDictionary dictionary];
+    for (NSDictionary *d in displays) {
+        nameToID[[self _shortNameForDisplay:d]] = d[@"id"];
+    }
+
+    NSNumber *mainIDNum = nameToID[mainName];
+    if (!mainIDNum) { [self showAlert:@"Restore failed" informative:@"Main display from saved layout not found."]; return; }
+
+    NSMutableArray<NSNumber *> *orderedIDs = [NSMutableArray array];
+    for (NSString *name in orderedNames) {
+        NSNumber *idNum = nameToID[name];
+        if (!idNum) { [self showAlert:@"Restore failed" informative:[NSString stringWithFormat:@"Display \"%@\" not found.", name]]; return; }
+        [orderedIDs addObject:idNum];
+    }
+
+    NSString *err = nil;
+    BOOL ok = [self.displayManager unmirrorOrdered:orderedIDs mainID:[mainIDNum unsignedIntValue] error:&err];
+    if (!ok) [self showAlert:@"Failed to restore layout." informative:err ?: @""];
 }
 
 - (void)dryRunDisplay:(NSMenuItem *)sender {
